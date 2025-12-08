@@ -1,0 +1,81 @@
+[project]
+name = "langchain-scayle"
+version = "0.1.0"
+description = "Langchain integration for Scayle Chat API[](https://chat.scayle.es)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+authors = [
+    {name = "Yi Zhang", email = "zhay@zhaw.ch"}
+]
+
+keywords = ["langchain", "llm", "scayle", "hpc", "ai", "chat"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "langchain-core>=1.1.2",
+    "pydantic>=2.12.5",
+    "requests>=2.32.5",
+    "typing-extensions>=4.15.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "black",
+]
+
+[build-system]
+requires = ["hatchling"]  # uv supports hatchling, poetry, flit, etc.
+build-backend = "hatchling.build"
+
+[tool.uv]
+# Optional: if you use uv for dev environment
+dev-dependencies = [
+    "pytest>=7.0",
+    "ruff>=0.4.0",
+    "black>=24.0",
+]
+
+[tool.ruff]
+select = ["E", "F", "W", "I", "N", "B", "A", "C4", "UP"]
+ignore = []
+
+[tool.black]
+line-length = 100
+target-version = ['py312']
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "requires_vpn: marks tests that require VPN connection",
+]
+
