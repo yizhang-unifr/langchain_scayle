@@ -6,6 +6,8 @@ import time
 from typing import Callable, Optional, overload, ParamSpec, TypeVar, Union
 from pydantic import BaseModel
 from langchain_core.tools import BaseTool
+from dotenv import load_dotenv
+import os
 
 # Set up default logger
 _default_logger = logging.getLogger(__name__)
@@ -258,4 +260,44 @@ def format_tool_for_openai_api(tool_obj: BaseTool) -> dict:
                 "required": param_names,
             },
         },
+    }
+
+
+def load_configuration() -> dict:
+    """Load configuration from environment variables.
+
+    Returns:
+        Dictionary containing configuration:
+        - base_url: Base URL for Scayle API
+        - username: Scayle username
+        - password: Scayle password
+        - verify_ssl: Whether to verify SSL certificates
+
+    Raises:
+        ValueError: If required environment variables are missing.
+    """
+    load_dotenv()
+
+    base_url = os.getenv("SCAYLE_BASE_URL", "https://chat.scayle.es/api")
+    username = os.getenv("SCAYLE_USERNAME")
+    password = os.getenv("SCAYLE_PASSWORD")
+    verify_ssl = os.getenv("SCAYLE_VERIFY_SSL", "true").lower() == "true"
+
+    # Ensure base_url ends with /api if needed
+    if "/api" not in base_url and not base_url.rstrip("/").endswith("/v1"):
+        if not base_url.endswith("/"):
+            base_url = f"{base_url}/api"
+        else:
+            base_url = f"{base_url}api"
+
+    if not username or not password:
+        raise ValueError(
+            "Missing required environment variables: 'username' and 'password' must be set in .env file"
+        )
+
+    return {
+        "base_url": base_url,
+        "username": username,
+        "password": password,
+        "verify_ssl": verify_ssl,
     }

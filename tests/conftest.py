@@ -12,10 +12,10 @@ load_dotenv()
 @pytest.fixture(scope="session")
 def scayle_credentials():
     """Get Scayle credentials from environment variables."""
-    base_url = os.getenv("base_url", "https://chat.scayle.es/api")
-    username = os.getenv("username")
-    password = os.getenv("password")
-    verify_ssl = os.getenv("verify_ssl", "true").lower() == "true"
+    base_url = os.getenv("SCAYLE_BASE_URL", "https://chat.scayle.es/api")
+    username = os.getenv("SCAYLE_USERNAME")
+    password = os.getenv("SCAYLE_PASSWORD")
+    verify_ssl = os.getenv("SCAYLE_VERIFY_SSL", "true").lower() == "true"
 
     # Ensure base_url ends with /api
     if "/api" not in base_url and not base_url.rstrip("/").endswith("/v1"):

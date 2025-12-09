@@ -20,6 +20,8 @@ from langchain_core.prompts import PromptTemplate
 from langchain_scayle.llm import ScayleLLM
 from langchain_scayle.utils import elapsed_time
 from langchain_scayle.utils import format_tool_for_openai_api
+from langchain_scayle.utils import load_configuration
+
 
 class ColoredFormatter(logging.Formatter):
     """Custom formatter with colors for different log levels."""
@@ -136,44 +138,7 @@ def get_weather(city: str) -> str:
     return weather_data.get(city, f"Weather information for {city} is not available.")
 
 
-def load_configuration() -> dict:
-    """Load configuration from environment variables.
 
-    Returns:
-        Dictionary containing configuration:
-        - base_url: Base URL for Scayle API
-        - username: Scayle username
-        - password: Scayle password
-        - verify_ssl: Whether to verify SSL certificates
-
-    Raises:
-        ValueError: If required environment variables are missing.
-    """
-    load_dotenv()
-
-    base_url = os.getenv("base_url", "https://chat.scayle.es/api")
-    username = os.getenv("username")
-    password = os.getenv("password")
-    verify_ssl = os.getenv("verify_ssl", "true").lower() == "true"
-
-    # Ensure base_url ends with /api if needed
-    if "/api" not in base_url and not base_url.rstrip("/").endswith("/v1"):
-        if not base_url.endswith("/"):
-            base_url = f"{base_url}/api"
-        else:
-            base_url = f"{base_url}api"
-
-    if not username or not password:
-        raise ValueError(
-            "Missing required environment variables: 'username' and 'password' must be set in .env file"
-        )
-
-    return {
-        "base_url": base_url,
-        "username": username,
-        "password": password,
-        "verify_ssl": verify_ssl,
-    }
 
 
 def initialize_llm(config: dict) -> ScayleLLM:
