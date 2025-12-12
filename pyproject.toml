@@ -1,6 +1,6 @@
 [project]
 name = "langchain-scayle"
-version = "0.1.0"
+version = "0.1.2"
 description = "Langchain integration for Scayle Chat API[](https://chat.scayle.es)"
 readme = "README.md"
 requires-python = ">=3.12"
