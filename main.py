@@ -17,10 +17,11 @@ from pydantic import BaseModel, Field
 from langchain_core.tools import tool
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
-from langchain_scayle.llm import ScayleLLM
+from langchain_scayle import ScayleLLM, ScayleOpenAI
 from langchain_scayle.utils import elapsed_time
 from langchain_scayle.utils import format_tool_for_openai_api
 from langchain_scayle.utils import load_configuration
+from langchain_core.messages import AIMessage
 
 
 class ColoredFormatter(logging.Formatter):
@@ -138,9 +139,6 @@ def get_weather(city: str) -> str:
     return weather_data.get(city, f"Weather information for {city} is not available.")
 
 
-
-
-
 def initialize_llm(config: dict) -> ScayleLLM:
     """Initialize and configure ScayleLLM instance.
 
@@ -160,7 +158,7 @@ def initialize_llm(config: dict) -> ScayleLLM:
     return llm
 
 
-def setup_llm_and_get_working_models(llm: ScayleLLM) -> list[str]:
+def setup_llm_and_get_working_models(llm: ScayleLLM | ScayleOpenAI) -> list[str]:
     """Set up LLM with connection check and get all working models.
 
     Args:
@@ -194,7 +192,7 @@ def setup_llm_and_get_working_models(llm: ScayleLLM) -> list[str]:
 
 
 @elapsed_time
-def _invoke_with_timing(llm: ScayleLLM, prompt: str) -> str:
+def _invoke_with_timing(llm: ScayleLLM | ScayleOpenAI, prompt: str) -> str | AIMessage:
     """Helper function to invoke LLM with timing decorator.
 
     This function is decorated with elapsed_time to demonstrate
@@ -210,7 +208,7 @@ def _invoke_with_timing(llm: ScayleLLM, prompt: str) -> str:
     return llm.invoke(prompt)
 
 
-def example_basic_usage(llm: ScayleLLM, model_id: str) -> bool:
+def example_basic_usage(llm: ScayleLLM | ScayleOpenAI, model_id: str) -> bool:
     """Example: Basic text generation with ScayleLLM.
 
     This demonstrates the simplest use case - generating a text response
@@ -246,7 +244,8 @@ def example_basic_usage(llm: ScayleLLM, model_id: str) -> bool:
         print()
         return False
 
-def example_tool_calling(llm: ScayleLLM, model_id: str) -> bool:
+
+def example_tool_calling(llm: ScayleLLM | ScayleOpenAI, model_id: str) -> bool:
     """Example: Tool calling (function calling) with ScayleLLM.
 
     This demonstrates how to use tool calling, where the model can decide
@@ -280,16 +279,34 @@ def example_tool_calling(llm: ScayleLLM, model_id: str) -> bool:
 
     try:
         llm.model = model_id
-        response = llm._call_api(prompt, tools=tools_api_format)
-        message = response.get("choices", [{}])[0].get("message", {})
-
-        # Check if tool calls are present
-        tool_calls = message.get("tool_calls")
+        # For ScayleLLM, use _call_api to get tool calls; for ScayleOpenAI, use invoke
+        if isinstance(llm, ScayleLLM):
+            # ScayleLLM returns dict from _call_api
+            response = llm._call_api(prompt, tools=tools_api_format)
+            message = response.get("choices", [{}])[0].get("message", {})
+            tool_calls = message.get("tool_calls")
+            message_content = message.get("content", "")
+        else:
+            # ScayleOpenAI returns AIMessage from invoke
+            response = llm.invoke(prompt, tools=tools_api_format)
+            if isinstance(response, AIMessage):
+                tool_calls = response.tool_calls
+                message_content = response.content
+            else:
+                # Fallback if somehow not AIMessage
+                tool_calls = None
+                message_content = str(response)
         if tool_calls:
             print("✓ Tool calls detected!")
             for tool_call in tool_calls:
-                func_name = tool_call.get("function", {}).get("name")
-                func_args = tool_call.get("function", {}).get("arguments")
+                if isinstance(llm, ScayleOpenAI) and isinstance(response, AIMessage):
+                    # AIMessage tool_call structure (from ChatOpenAI)
+                    func_name = tool_call.get("name", "")
+                    func_args = tool_call.get("args", {})
+                else:
+                    # Dict tool_call structure (from ScayleLLM._call_api)
+                    func_name = tool_call.get("function", {}).get("name")
+                    func_args = tool_call.get("function", {}).get("arguments")
                 print(f"  Function: {func_name}")
                 print(f"  Arguments: {func_args}")
                 print()
@@ -297,7 +314,7 @@ def example_tool_calling(llm: ScayleLLM, model_id: str) -> bool:
                 # and send the result back to the model
         else:
             print("Note: Model responded directly without calling tools")
-            print(f"Content: {message.get('content', 'N/A')}")
+            print(f"Content: {message_content}")
             print()
 
         print("✓ Tool calling example completed!")
@@ -375,7 +392,7 @@ Joke:""",
         return False
 
 
-def main():
+def example_scayle_llm():
     """Main function demonstrating ScayleLLM usage examples.
 
     Tests all working models iteratively with three examples:
@@ -454,6 +471,79 @@ def main():
 
         traceback.print_exc()
 
+def example_scayle_openai():
+    """Test the ScayleOpenAI with all examples."""
+    print("=" * 60)
+    print("ScayleOpenAI Usage Examples - Testing All Models")
+    print("=" * 60)
+    print()
+
+    try:
+        # Load configuration
+        config = load_configuration()
+
+        # Initialize LLM
+        print("Initializing ScayleOpenAI...")
+        llm = initialize_llm(config)
+        print("✓ ScayleOpenAI initialized")
+        print()
+
+        # Get all working models
+        working_models = setup_llm_and_get_working_models(llm)
+
+        # Track results for each model
+        results = {}
+
+        # Test each model with all examples
+        for i, model_id in enumerate(working_models, 1):
+            print("=" * 60)
+            print(f"Testing Model {i}/{len(working_models)}: {model_id}")
+            print("=" * 60)
+            print()
+
+            model_results = {
+                "basic_usage": False,
+                "tool_calling": False,
+                "structured_output": False,
+            }
+
+            # Run examples for this model
+            model_results["basic_usage"] = example_basic_usage(llm, model_id)
+            model_results["tool_calling"] = example_tool_calling(llm, model_id)
+            model_results["structured_output"] = example_structured_output(llm, model_id)
+
+            results[model_id] = model_results
+
+            print("=" * 60)
+            print(f"Model {model_id} testing completed")
+            print("=" * 60)
+            print()
+
+        # Print summary
+        print("=" * 60) 
+        print("Summary - Results by Model")
+        print("=" * 60)
+        for model_id, model_results in results.items():
+            print(f"\nModel: {model_id}")
+            print(f"  Basic Usage: {'✓' if model_results['basic_usage'] else '✗'}")
+            print(f"  Tool Calling: {'✓' if model_results['tool_calling'] else '✗'}")
+            print(f"  Structured Output: {'✓' if model_results['structured_output'] else '✗'}")
+
+        print()
+        print("=" * 60)
+        print("All examples completed!")
+        print("=" * 60)
+
+    except ValueError as e:
+        print(f"✗ Configuration error: {e}")
+    except RuntimeError as e:
+        print(f"✗ Setup error: {e}")
+    except Exception as e:
+        print(f"✗ Unexpected error: {e}")
+        import traceback
+
+        traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    example_scayle_llm()
+    example_scayle_openai()
