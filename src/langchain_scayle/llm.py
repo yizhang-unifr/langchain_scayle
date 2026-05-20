@@ -5,7 +5,8 @@ This module provides a Scayle LLM class similar to langchain_community.llms.Olla
 allowing seamless integration with LangChain workflows.
 """
 
-from typing import Any, Dict, List, Optional
+import json
+from typing import Any, Callable, Dict, List, Optional, Union
 import requests
 import urllib3
 from pydantic import Field, ConfigDict
@@ -16,6 +17,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.llms import BaseLLM
 from langchain_core.outputs import Generation, LLMResult
+
+ToolExecutor = Callable[[str, Dict[str, Any]], str]
 
 
 class ScayleLLM(BaseLLM):
@@ -37,6 +40,10 @@ class ScayleLLM(BaseLLM):
         description="Whether to verify SSL certificates. Set to False for self-signed certs.",
     )
     timeout: Optional[float] = Field(default=30.0, description="Request timeout in seconds.")
+    max_tool_rounds: int = Field(
+        default=10,
+        description="Maximum chat rounds when the model returns tool_calls before final text.",
+    )
     # Add other parameters as needed, e.g., top_k, frequency_penalty, etc.
     # These can be passed to the API if supported.
 
@@ -266,6 +273,108 @@ class ScayleLLM(BaseLLM):
         """Return the type of the language model."""
         return "scayle"
 
+    @staticmethod
+    def _parse_tool_arguments(arguments: Union[str, Dict[str, Any], None]) -> Dict[str, Any]:
+        if arguments is None:
+            return {}
+        if isinstance(arguments, dict):
+            return arguments
+        try:
+            parsed = json.loads(arguments)
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+        except json.JSONDecodeError:
+            return {"raw": arguments}
+
+    def _default_tool_executor(self, name: str, arguments: Dict[str, Any]) -> str:
+        """Acknowledge server-side or unknown tools so the model can continue."""
+        return json.dumps(
+            {
+                "status": "acknowledged",
+                "tool": name,
+                "arguments": arguments,
+                "note": (
+                    "Tool call received. Continue using the conversation context "
+                    "to produce your final response."
+                ),
+            }
+        )
+
+    def _build_tool_executor(
+        self, kwargs: Dict[str, Any]
+    ) -> ToolExecutor:
+        custom = kwargs.get("tool_executor")
+        if custom is not None:
+            return custom
+
+        tool_map: Dict[str, Callable[..., Any]] = kwargs.get("tool_map") or {}
+        if not tool_map:
+            return self._default_tool_executor
+
+        def _mapped_executor(name: str, arguments: Dict[str, Any]) -> str:
+            handler = tool_map.get(name)
+            if handler is None:
+                return self._default_tool_executor(name, arguments)
+            result = handler(**arguments) if arguments else handler()
+            if isinstance(result, str):
+                return result
+            return json.dumps(result)
+
+        return _mapped_executor
+
+    def _tool_result_messages(
+        self, tool_calls: List[Dict[str, Any]], executor: ToolExecutor
+    ) -> List[Dict[str, str]]:
+        messages: List[Dict[str, str]] = []
+        for tool_call in tool_calls:
+            function = tool_call.get("function", {})
+            name = function.get("name", "")
+            arguments = self._parse_tool_arguments(function.get("arguments"))
+            content = executor(name, arguments)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.get("id", ""),
+                    "content": content,
+                }
+            )
+        return messages
+
+    def _message_text(self, message: Dict[str, Any]) -> str:
+        content = message.get("content")
+        if content is None:
+            return ""
+        return content if isinstance(content, str) else str(content)
+
+    def _complete_with_tool_loop(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_executor: Optional[ToolExecutor] = None,
+    ) -> str:
+        """Run chat completions until the model returns final text content."""
+        executor = tool_executor or self._default_tool_executor
+        conversation = list(messages)
+
+        for _ in range(self.max_tool_rounds):
+            response = self._chat_completion(conversation, tools=tools)
+            choice = response["choices"][0]
+            message = choice.get("message", {})
+            tool_calls = message.get("tool_calls") or []
+
+            if tool_calls:
+                conversation.append(message)
+                conversation.extend(self._tool_result_messages(tool_calls, executor))
+                continue
+
+            text = self._message_text(message)
+            if text:
+                return text
+
+        raise ValueError(
+            f"Model '{self.model}' exceeded max_tool_rounds={self.max_tool_rounds} "
+            "without returning final text content."
+        )
+
     def _generate(
         self,
         prompts: List[str],
@@ -283,19 +392,23 @@ class ScayleLLM(BaseLLM):
             self.model = available_models[0]  # Default to first model if not specified
 
         generations = []
-        # Extract tools from kwargs if provided
         tools = kwargs.get("tools", None)
+        tool_executor = self._build_tool_executor(kwargs)
         for prompt in prompts:
-            response = self._call_api(prompt, tools=tools)
-            text = response["choices"][0]["message"]["content"]
+            messages = [{"role": "user", "content": prompt}]
+            text = self._complete_with_tool_loop(
+                messages, tools=tools, tool_executor=tool_executor
+            )
             generations.append([Generation(text=text)])
 
         return LLMResult(generations=generations)
 
-    def _call_api(
-        self, message: str, tools: Optional[List[Dict[str, Any]]] = None
+    def _chat_completion(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Call the Scayle Chat Completions API."""
+        """Call the Scayle Chat Completions API with a full message history."""
         self._authenticate()  # Ensure token is fresh
 
         url = f"{self.base_url}/chat/completions"
@@ -303,23 +416,15 @@ class ScayleLLM(BaseLLM):
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
-        data = {
+        data: Dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": message,
-                }
-            ],
+            "messages": messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "top_p": self.top_p,
-            # Add other params if supported by Scayle API
         }
-        # Add tools if provided
         if tools is not None:
             data["tools"] = tools
-        # Remove None values
         data = {k: v for k, v in data.items() if v is not None}
 
         try:
@@ -342,7 +447,6 @@ class ScayleLLM(BaseLLM):
             ) from e
         if response.status_code != 200:
             error_detail = response.text
-            # Provide more helpful error messages
             if response.status_code == 400:
                 if "Connection error" in error_detail or "InternalServerError" in error_detail:
                     raise ValueError(
@@ -354,3 +458,12 @@ class ScayleLLM(BaseLLM):
                 f"Response: {error_detail}"
             )
         return response.json()
+
+    def _call_api(
+        self, message: str, tools: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """Call the Scayle Chat Completions API with a single user message."""
+        return self._chat_completion(
+            [{"role": "user", "content": message}],
+            tools=tools,
+        )
